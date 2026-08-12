@@ -18,34 +18,36 @@ let running = false;
 let detected = false;
 let refDescriptors = null;
 let refKeypoints = null;
-let orb = null;
+let detector = null;
 let matcher = null;
 let lastDetect = 0;
 let raf = null;
 let muted = true;
+let detectorName = "";
 
-const MIN_MATCHES = 7;
-const DETECT_INTERVAL = 260;
+const MIN_MATCHES = 5;
+const DETECT_INTERVAL = 300;
 
 function toastMsg(message) {
   toast.textContent = message;
   toast.classList.add("show");
-  setTimeout(() => toast.classList.remove("show"), 2400);
+  setTimeout(() => toast.classList.remove("show"), 2600);
 }
 
 function setText(title, text, debug = "") {
   scanTitle.textContent = title;
   scanText.textContent = text;
-  scanDebug.textContent = debug;
+  if (debug) scanDebug.textContent = debug;
 }
 
 function waitForCV() {
   return new Promise((resolve, reject) => {
     const started = Date.now();
     const check = () => {
-      if (window.cv && cv.Mat && cv.ORB) return resolve();
+      if (window.cv && cv.Mat) return resolve();
       if (Date.now() - started > 20000) {
-        return reject(new Error("Image recognition library could not load. Check internet access."));
+        reject(new Error("OpenCV.js did not load. Check internet access."));
+        return;
       }
       setTimeout(check, 120);
     };
@@ -60,7 +62,7 @@ async function prepareReference() {
   img.src = "assets/target-poster.jpg";
   await img.decode();
 
-  const maxSide = 900;
+  const maxSide = 1000;
   const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
   const w = Math.max(1, Math.round(img.naturalWidth * scale));
   const h = Math.max(1, Math.round(img.naturalHeight * scale));
@@ -75,19 +77,31 @@ async function prepareReference() {
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
   cv.equalizeHist(gray, gray);
 
-  orb = new cv.ORB(1800);
-  refKeypoints = new cv.KeyPointVector();
-  refDescriptors = new cv.Mat();
-  orb.detectAndCompute(gray, new cv.Mat(), refKeypoints, refDescriptors);
+  // Prefer SIFT when available because it is substantially more tolerant
+  // of scaling, lighting and screen/print differences.
+  if (cv.SIFT && typeof cv.SIFT.create === "function") {
+    detector = cv.SIFT.create(1200);
+    detectorName = "SIFT";
+    refKeypoints = new cv.KeyPointVector();
+    refDescriptors = new cv.Mat();
+    detector.detectAndCompute(gray, new cv.Mat(), refKeypoints, refDescriptors);
+    matcher = new cv.BFMatcher(cv.NORM_L2, false);
+  } else {
+    detector = new cv.ORB(2200);
+    detectorName = "ORB";
+    refKeypoints = new cv.KeyPointVector();
+    refDescriptors = new cv.Mat();
+    detector.detectAndCompute(gray, new cv.Mat(), refKeypoints, refDescriptors);
+    matcher = new cv.BFMatcher(cv.NORM_HAMMING, false);
+  }
 
   src.delete();
   gray.delete();
 
-  if (refDescriptors.empty() || refDescriptors.rows < 8) {
-    throw new Error("The reference image has too few recognizable features.");
+  if (!refDescriptors || refDescriptors.empty() || refDescriptors.rows < 8) {
+    throw new Error(`Reference image produced too few ${detectorName} features.`);
   }
 
-  matcher = new cv.BFMatcher(cv.NORM_HAMMING, false);
   return refDescriptors.rows;
 }
 
@@ -98,7 +112,7 @@ async function openScanner() {
   videoView.setAttribute("aria-hidden", "true");
   detected = false;
 
-  setText("STARTING CAMERA", "Please allow camera access.", "Loading image recognition…");
+  setText("STARTING CAMERA", "Preparing image recognition…", "Loading reference image…");
 
   try {
     const features = await prepareReference();
@@ -121,10 +135,10 @@ async function openScanner() {
 
     setText(
       "SCAN THE FRAME",
-      "Point the rear camera at the printed frame.",
-      `Reference loaded • ${features} visual features`
+      "Point the rear camera at the same poster image.",
+      `${detectorName} ready • ${features} reference features`
     );
-    scannerHint.textContent = "Move closer until the artwork fills the guide.";
+    scannerHint.textContent = "Move closer and keep the whole poster visible.";
     running = true;
     loop();
   } catch (error) {
@@ -133,72 +147,104 @@ async function openScanner() {
     if (error.name === "NotAllowedError") {
       message = "Camera permission was denied. Allow camera access and try again.";
     }
-    setText("CAMERA NOT READY", message, "Use the HTTPS GitHub Pages URL.");
+    setText("SCAN NOT READY", message, "Open the HTTPS site and try again.");
     toastMsg(message);
   }
 }
 
-function detect() {
-  if (!running || detected || camera.readyState < 2) return;
-
-  const width = 640;
-  const height = Math.round(width * camera.videoHeight / camera.videoWidth);
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  canvas.getContext("2d").drawImage(camera, 0, 0, width, height);
-
-  const frame = cv.imread(canvas);
-  const gray = new cv.Mat();
-  cv.cvtColor(frame, gray, cv.COLOR_RGBA2GRAY);
-  cv.equalizeHist(gray, gray);
-
+function countGoodMatches(frameGray) {
   const keypoints = new cv.KeyPointVector();
   const descriptors = new cv.Mat();
-  orb.detectAndCompute(gray, new cv.Mat(), keypoints, descriptors);
+
+  detector.detectAndCompute(frameGray, new cv.Mat(), keypoints, descriptors);
 
   let good = 0;
+  let total = 0;
 
   if (!descriptors.empty()) {
     const knn = new cv.DMatchVectorVector();
     matcher.knnMatch(refDescriptors, descriptors, knn, 2);
 
+    total = knn.size();
+
     for (let i = 0; i < knn.size(); i++) {
       const pair = knn.get(i);
+
       if (pair.size() >= 2) {
         const a = pair.get(0);
         const b = pair.get(1);
-        if (a.distance < 0.82 * b.distance) good++;
+
+        // Ratio test: tolerant enough for screen/print changes.
+        const ratio = detectorName === "SIFT" ? 0.78 : 0.82;
+        if (a.distance < ratio * b.distance) good++;
+
         a.delete();
         b.delete();
       }
+
       pair.delete();
     }
+
     knn.delete();
   }
 
-  scanDebug.textContent = `Image match: ${good} visual points`;
-  if (good >= MIN_MATCHES) triggerExperience();
-
-  frame.delete();
-  gray.delete();
   keypoints.delete();
   descriptors.delete();
+
+  return { good, total };
+}
+
+function detect() {
+  if (!running || detected || camera.readyState < 2) return;
+
+  try {
+    const width = 720;
+    const height = Math.round(width * camera.videoHeight / camera.videoWidth);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext("2d").drawImage(camera, 0, 0, width, height);
+
+    const frame = cv.imread(canvas);
+    const gray = new cv.Mat();
+
+    cv.cvtColor(frame, gray, cv.COLOR_RGBA2GRAY);
+    cv.equalizeHist(gray, gray);
+
+    const result = countGoodMatches(gray);
+
+    // Always expose the live number so we can diagnose real-world scanning.
+    scanDebug.textContent =
+      `${detectorName}: ${result.good} good matches / ${result.total} candidates`;
+
+    if (result.good >= MIN_MATCHES) {
+      triggerExperience();
+    }
+
+    frame.delete();
+    gray.delete();
+  } catch (error) {
+    console.error("Detection pass failed:", error);
+    scanDebug.textContent = `Detection error: ${error.message}`;
+  }
 }
 
 function loop() {
   if (!running) return;
+
   const now = performance.now();
-  if (now - lastDetect > DETECT_INTERVAL) {
+  if (now - lastDetect >= DETECT_INTERVAL) {
     lastDetect = now;
-    try { detect(); } catch (e) { console.error(e); }
+    detect();
   }
+
   raf = requestAnimationFrame(loop);
 }
 
 function stopCamera() {
   running = false;
+
   if (raf) cancelAnimationFrame(raf);
   raf = null;
 
@@ -214,14 +260,16 @@ function triggerExperience() {
   detected = true;
   stopCamera();
 
-  setText("FRAME DETECTED", "Opening your hidden video…", "Experience unlocked");
-  scannerHint.textContent = "Frame recognized.";
+  setText("FRAME DETECTED", "Opening your hidden video…", "✓ Poster recognized");
+  scannerHint.textContent = "Experience unlocked.";
 
   setTimeout(() => {
     videoView.classList.add("show");
     videoView.setAttribute("aria-hidden", "false");
+
     experienceVideo.muted = muted;
     experienceVideo.currentTime = 0;
+
     experienceVideo.play().catch(() => {
       toastMsg("Tap SOUND or the video to start playback.");
     });
