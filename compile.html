@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Star Creation — MindAR Target Compiler</title>
+<style>
+body{font-family:Inter,Arial,sans-serif;background:#f5f5f7;margin:0;padding:40px;color:#111}
+main{max-width:700px;margin:auto;background:#fff;padding:32px;border-radius:28px;box-shadow:0 20px 70px #0001}
+h1{font-size:42px;letter-spacing:-.05em;margin:0 0 12px}
+p{color:#666;line-height:1.6}
+button{border:0;border-radius:999px;padding:14px 20px;background:#111;color:#fff;font-weight:700;cursor:pointer}
+#progress{margin-top:20px;font-family:monospace;color:#7657ff}
+#preview{max-width:100%;max-height:350px;margin-top:20px;border-radius:18px;display:none}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image.prod.js"></script>
+</head>
+<body>
+<main>
+<h1>Star Creation<br>Target Compiler</h1>
+<p>Select the exact poster image that customers will scan. MindAR needs a compiled <b>.mind</b> target file before the scanner can recognize the physical poster.</p>
+<input id="file" type="file" accept="image/*">
+<img id="preview">
+<br><br>
+<button id="compile">Compile Target</button>
+<div id="progress">Waiting for poster…</div>
+</main>
+<script>
+const file=document.getElementById("file"),preview=document.getElementById("preview"),progress=document.getElementById("progress");
+let image=null;
+file.onchange=async()=>{const f=file.files[0];if(!f)return;image=new Image();image.src=URL.createObjectURL(f);await image.decode();preview.src=image.src;preview.style.display="block";progress.textContent=`Loaded ${image.naturalWidth} × ${image.naturalHeight}`};
+document.getElementById("compile").onclick=async()=>{
+ if(!image){progress.textContent="Choose the poster first.";return}
+ try{
+  const compiler=new window.MINDAR.Compiler();
+  progress.textContent="Compiling… 0%";
+  const data=await compiler.compileImageTargets([image],p=>progress.textContent=`Compiling… ${Math.round(p*100)}%`);
+  const buffer=await compiler.exportData();
+  const blob=new Blob([buffer],{type:"application/octet-stream"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="targets.mind";a.click();
+  progress.textContent="Done. Put targets.mind inside assets/ and deploy the scanner.";
+ }catch(e){console.error(e);progress.textContent="Compile failed: "+e.message}
+};
+</script>
+</body>
+</html>
