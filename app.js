@@ -1,249 +1,65 @@
-const scanner = document.getElementById("scanner");
-const startButtons = [document.getElementById("startBtn"), document.getElementById("bottomScan")];
-const closeScanner = document.getElementById("closeScanner");
-const camera = document.getElementById("camera");
-const scanTitle = document.getElementById("scanTitle");
-const scanText = document.getElementById("scanText");
-const scanDebug = document.getElementById("scanDebug");
-const scannerHint = document.getElementById("scannerHint");
-const videoView = document.getElementById("videoView");
-const experienceVideo = document.getElementById("experienceVideo");
-const muteBtn = document.getElementById("muteBtn");
-const replayBtn = document.getElementById("replayBtn");
-const againBtn = document.getElementById("againBtn");
-const toast = document.getElementById("toast");
+const scanner=document.getElementById("scanner");
+const startButtons=[document.getElementById("startBtn"),document.getElementById("bottomScan")];
+const closeScanner=document.getElementById("closeScanner"),flashBtn=document.getElementById("flashBtn");
+const camera=document.getElementById("camera"),scanTitle=document.getElementById("scanTitle"),scanText=document.getElementById("scanText"),scanDebug=document.getElementById("scanDebug"),scannerHint=document.getElementById("scannerHint");
+const videoView=document.getElementById("videoView"),experienceVideo=document.getElementById("experienceVideo"),muteBtn=document.getElementById("muteBtn"),replayBtn=document.getElementById("replayBtn"),againBtn=document.getElementById("againBtn"),toast=document.getElementById("toast");
 
-let stream = null;
-let running = false;
-let detected = false;
-let model = null;
-let targetEmbedding = null;
-let lastInference = 0;
-let raf = null;
-let muted = true;
-let consecutiveMatches = 0;
-let scanStartedAt = 0;
-let modelReady = false;
+let stream=null,track=null,running=false,detected=false,model=null,targetEmbedding=null,raf=null,lastInference=0,scanStartedAt=0,consecutiveMatches=0,muted=true,torchOn=false,busy=false,modelReady=false;
+const THRESHOLD=.78, REQUIRED=3, MIN_TIME=1200, INTERVAL=500;
 
-const SIMILARITY_THRESHOLD = 0.84;
-const REQUIRED_CONSECUTIVE = 3;
-const MIN_SCAN_TIME = 1200;
-const INFERENCE_INTERVAL = 650;
+function toastMsg(m){toast.textContent=m;toast.classList.add("show");setTimeout(()=>toast.classList.remove("show"),2500)}
+function setText(a,b,c=""){scanTitle.textContent=a;scanText.textContent=b;if(c)scanDebug.textContent=c}
+function cosine(a,b){let d=0,x=0,y=0;for(let i=0;i<a.length;i++){d+=a[i]*b[i];x+=a[i]*a[i];y+=b[i]*b[i]}return(!x||!y)?0:d/(Math.sqrt(x)*Math.sqrt(y))}
+function arr(t){return Array.from(t.dataSync())}
+async function embed(src){const t=model.infer(src,"conv_preds");const v=arr(t);t.dispose();return v}
+function cameraCanvas(){const vw=camera.videoWidth,vh=camera.videoHeight,w=Math.floor(vw*.78),h=Math.floor(vh*.88),sx=Math.floor((vw-w)/2),sy=Math.floor((vh-h)/2);const c=document.createElement("canvas");c.width=480;c.height=480;c.getContext("2d").drawImage(camera,sx,sy,w,h,0,0,480,480);return c}
 
-function toastMsg(message) {
-  toast.textContent = message;
-  toast.classList.add("show");
-  setTimeout(() => toast.classList.remove("show"), 2600);
+async function prepareAI(){
+ if(modelReady)return;
+ setText("LOADING AI","Preparing visual recognition…","TensorFlow.js • MobileNet V2");
+ await tf.ready();model=await mobilenet.load({version:2,alpha:1});
+ const img=new Image();img.src="assets/target-poster.jpg";await img.decode();
+ targetEmbedding=await embed(img);modelReady=true;
+ setText("AI READY","Point the rear camera at the registered poster.","✓ Target image loaded");
 }
 
-function setText(title, text, debug = "") {
-  scanTitle.textContent = title;
-  scanText.textContent = text;
-  if (debug) scanDebug.textContent = debug;
+async function openScanner(){
+ scanner.classList.add("active");scanner.setAttribute("aria-hidden","false");
+ videoView.classList.remove("show");videoView.setAttribute("aria-hidden","true");
+ experienceVideo.pause();experienceVideo.currentTime=0;detected=false;consecutiveMatches=0;busy=false;
+ try{
+  await prepareAI();
+  if(!navigator.mediaDevices?.getUserMedia)throw new Error("Camera access requires HTTPS or localhost.");
+  setText("STARTING CAMERA","Please allow camera access.","AI target ready");
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:1280},height:{ideal:720}},audio:false});
+  track=stream.getVideoTracks()[0];camera.srcObject=stream;await camera.play();
+  const caps=track.getCapabilities?track.getCapabilities():{};
+  flashBtn.style.display=caps.torch?"grid":"none";
+  setText("SCAN THE FRAME","Point the camera at the same poster image.","AI similarity: waiting…");
+  scannerHint.textContent="Keep the complete poster inside the guide.";running=true;scanStartedAt=performance.now();lastInference=0;loop();
+ }catch(e){console.error(e);let m=e.name==="NotAllowedError"?"Camera permission was denied. Allow camera access and try again.":e.message||"Unable to start scanner.";setText("SCANNER NOT READY",m,"Use the HTTPS GitHub Pages URL.");toastMsg(m)}
 }
-
-function cosineSimilarity(a, b) {
-  let dot = 0, aa = 0, bb = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    aa += a[i] * a[i];
-    bb += b[i] * b[i];
-  }
-  return (!aa || !bb) ? 0 : dot / (Math.sqrt(aa) * Math.sqrt(bb));
+async function toggleFlash(){
+ if(!track)return;const caps=track.getCapabilities?track.getCapabilities():{};
+ if(!caps.torch){toastMsg("Flash control is not available on this camera/browser.");return}
+ try{torchOn=!torchOn;await track.applyConstraints({advanced:[{torch:torchOn}]});flashBtn.classList.toggle("on",torchOn);toastMsg(torchOn?"Flash ON":"Flash OFF")}
+ catch(e){torchOn=false;flashBtn.classList.remove("on");toastMsg("Browser flash control is unavailable on this phone.")}
 }
-
-function tensorToArray(tensor) {
-  return Array.from(tensor.dataSync());
+async function infer(){
+ if(!running||detected||busy||!model||camera.readyState<2)return;busy=true;
+ try{
+  const v=await embed(cameraCanvas()),sim=cosine(targetEmbedding,v),pct=Math.round(Math.max(0,Math.min(1,sim))*100),ok=sim>=THRESHOLD;
+  consecutiveMatches=ok?consecutiveMatches+1:0;
+  scanDebug.textContent=`AI similarity: ${pct}% • confirm ${consecutiveMatches}/${REQUIRED}`;
+  if(ok&&consecutiveMatches>=REQUIRED&&performance.now()-scanStartedAt>=MIN_TIME)triggerExperience();
+ }catch(e){console.error(e);scanDebug.textContent="AI retrying…"}finally{busy=false}
 }
-
-async function imageEmbedding(source) {
-  const activation = model.infer(source, "conv_preds");
-  const values = tensorToArray(activation);
-  activation.dispose();
-  return values;
-}
-
-function cropCameraFrame() {
-  const vw = camera.videoWidth;
-  const vh = camera.videoHeight;
-  const cropW = Math.floor(vw * 0.78);
-  const cropH = Math.floor(vh * 0.88);
-  const sx = Math.floor((vw - cropW) / 2);
-  const sy = Math.floor((vh - cropH) / 2);
-
-  const canvas = document.createElement("canvas");
-  canvas.width = 480;
-  canvas.height = 480;
-  canvas.getContext("2d").drawImage(camera, sx, sy, cropW, cropH, 0, 0, 480, 480);
-  return canvas;
-}
-
-async function prepareAI() {
-  if (modelReady) return;
-
-  setText("LOADING AI", "Preparing the visual recognition model…", "TensorFlow.js • MobileNet V2");
-  await tf.ready();
-
-  model = await mobilenet.load({ version: 2, alpha: 1.0 });
-
-  const target = new Image();
-  target.src = "assets/target-poster.jpg";
-  await target.decode();
-
-  targetEmbedding = await imageEmbedding(target);
-  modelReady = true;
-
-  setText("AI READY", "Point the rear camera at the registered poster.", "MobileNet visual fingerprint loaded");
-}
-
-async function openScanner() {
-  scanner.classList.add("active");
-  scanner.setAttribute("aria-hidden", "false");
-  videoView.classList.remove("show");
-  videoView.setAttribute("aria-hidden", "true");
-
-  experienceVideo.pause();
-  experienceVideo.currentTime = 0;
-
-  detected = false;
-  consecutiveMatches = 0;
-  scanStartedAt = 0;
-
-  try {
-    await prepareAI();
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("Camera access requires HTTPS or localhost.");
-    }
-
-    setText("STARTING CAMERA", "Please allow camera access.", "AI model ready");
-
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false
-    });
-
-    camera.srcObject = stream;
-    await camera.play();
-
-    setText("SCAN THE FRAME", "Point the camera at the same poster image.", "AI similarity: waiting…");
-    scannerHint.textContent = "Keep the poster inside the guide.";
-    running = true;
-    scanStartedAt = performance.now();
-    consecutiveMatches = 0;
-    loop();
-  } catch (error) {
-    console.error(error);
-    let message = error.message || "Unable to start scanner.";
-    if (error.name === "NotAllowedError") message = "Camera permission was denied. Allow camera access and try again.";
-    setText("SCANNER NOT READY", message, "Check the HTTPS GitHub Pages URL.");
-    toastMsg(message);
-  }
-}
-
-async function runAIInference() {
-  if (!running || detected || camera.readyState < 2 || !model) return;
-
-  const canvas = cropCameraFrame();
-
-  try {
-    const currentEmbedding = await imageEmbedding(canvas);
-    const similarity = cosineSimilarity(targetEmbedding, currentEmbedding);
-    const percent = Math.max(0, Math.min(100, Math.round(similarity * 100)));
-    const isMatch = similarity >= SIMILARITY_THRESHOLD;
-
-    consecutiveMatches = isMatch ? consecutiveMatches + 1 : 0;
-
-    scanDebug.textContent =
-      `AI similarity: ${percent}% • confirm ${consecutiveMatches}/${REQUIRED_CONSECUTIVE}`;
-
-    if (isMatch &&
-        consecutiveMatches >= REQUIRED_CONSECUTIVE &&
-        performance.now() - scanStartedAt >= MIN_SCAN_TIME) {
-      triggerExperience();
-    }
-  } catch (error) {
-    console.error("AI inference error:", error);
-    scanDebug.textContent = "AI inference error — retrying…";
-  }
-}
-
-function loop() {
-  if (!running) return;
-  const now = performance.now();
-  if (now - lastInference >= INFERENCE_INTERVAL) {
-    lastInference = now;
-    runAIInference();
-  }
-  raf = requestAnimationFrame(loop);
-}
-
-function stopCamera() {
-  running = false;
-  if (raf) cancelAnimationFrame(raf);
-  raf = null;
-  if (stream) {
-    stream.getTracks().forEach(track => track.stop());
-    stream = null;
-  }
-  camera.srcObject = null;
-}
-
-function triggerExperience() {
-  if (detected) return;
-  detected = true;
-  stopCamera();
-  setText("FRAME DETECTED", "Opening your hidden video…", "✓ AI image match confirmed");
-  scannerHint.textContent = "Experience unlocked.";
-
-  setTimeout(() => {
-    videoView.classList.add("show");
-    videoView.setAttribute("aria-hidden", "false");
-    experienceVideo.muted = muted;
-    experienceVideo.currentTime = 0;
-    experienceVideo.play().catch(() => toastMsg("Tap SOUND or the video to start playback."));
-  }, 350);
-}
-
-function closeAll() {
-  stopCamera();
-  experienceVideo.pause();
-  experienceVideo.currentTime = 0;
-  videoView.classList.remove("show");
-  videoView.setAttribute("aria-hidden", "true");
-  scanner.classList.remove("active");
-  scanner.setAttribute("aria-hidden", "true");
-}
-
-function scanAgain() {
-  experienceVideo.pause();
-  experienceVideo.currentTime = 0;
-  videoView.classList.remove("show");
-  videoView.setAttribute("aria-hidden", "true");
-  openScanner();
-}
-
-startButtons.forEach(btn => btn.addEventListener("click", openScanner));
-closeScanner.addEventListener("click", closeAll);
-againBtn.addEventListener("click", scanAgain);
-
-muteBtn.addEventListener("click", async () => {
-  muted = !muted;
-  experienceVideo.muted = muted;
-  muteBtn.textContent = muted ? "🔇 SOUND" : "🔊 SOUND";
-  if (!muted) {
-    try { await experienceVideo.play(); } catch (e) {}
-  }
-});
-
-replayBtn.addEventListener("click", async () => {
-  experienceVideo.currentTime = 0;
-  try { await experienceVideo.play(); } catch (e) {}
-});
-
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden && scanner.classList.contains("active")) {
-    stopCamera();
-    experienceVideo.pause();
-  }
-});
+function loop(){if(!running)return;const n=performance.now();if(n-lastInference>=INTERVAL){lastInference=n;infer()}raf=requestAnimationFrame(loop)}
+function stopCamera(){running=false;if(raf)cancelAnimationFrame(raf);raf=null;if(track){try{track.applyConstraints({advanced:[{torch:false}]})}catch(_){}}if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;track=null;torchOn=false;flashBtn.classList.remove("on");camera.srcObject=null}
+function triggerExperience(){if(detected)return;detected=true;stopCamera();setText("FRAME DETECTED","Opening your hidden video…","✓ AI image match confirmed");scannerHint.textContent="Experience unlocked.";setTimeout(()=>{videoView.classList.add("show");videoView.setAttribute("aria-hidden","false");experienceVideo.muted=muted;experienceVideo.currentTime=0;experienceVideo.play().catch(()=>toastMsg("Tap SOUND to start playback."))},300)}
+function closeAll(){stopCamera();experienceVideo.pause();experienceVideo.currentTime=0;videoView.classList.remove("show");videoView.setAttribute("aria-hidden","true");scanner.classList.remove("active");scanner.setAttribute("aria-hidden","true")}
+function scanAgain(){closeAll();openScanner()}
+startButtons.forEach(b=>b.addEventListener("click",openScanner));closeScanner.addEventListener("click",closeAll);flashBtn.addEventListener("click",toggleFlash);againBtn.addEventListener("click",scanAgain);
+muteBtn.addEventListener("click",async()=>{muted=!muted;experienceVideo.muted=muted;muteBtn.textContent=muted?"🔇 SOUND":"🔊 SOUND";if(!muted)try{await experienceVideo.play()}catch(_){}});
+replayBtn.addEventListener("click",async()=>{experienceVideo.currentTime=0;try{await experienceVideo.play()}catch(_){}});
+document.addEventListener("visibilitychange",()=>{if(document.hidden&&scanner.classList.contains("active")){stopCamera();experienceVideo.pause()}});
