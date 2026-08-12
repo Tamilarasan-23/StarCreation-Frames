@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f5f5f7">
+  <title>Star Creation AR Frames</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+
+  <header class="nav">
+    <a class="logo" href="#">
+      <img src="assets/logo.png" alt="Star Creation">
+      <span>STAR CREATION <b>AR FRAMES</b></span>
+    </a>
+    <div class="nav-pill">WEB AR</div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <div class="eyebrow"><span></span> A FRAME WITH A SECRET</div>
+        <h1>Make your<br><em>memories move.</em></h1>
+        <p class="lead">
+          Point your phone at a Star Creation frame. When the artwork is recognized,
+          its hidden video comes alive on your screen.
+        </p>
+        <button class="scan-btn" id="startBtn">
+          <span class="scan-icon">⌾</span>
+          <span>SCAN FRAME</span>
+          <span class="arrow">↗</span>
+        </button>
+        <p class="privacy">Camera access is requested only when you start scanning.</p>
+      </div>
+
+      <div class="hero-card-wrap">
+        <div class="glass-card back-card"></div>
+        <div class="glass-card main-card">
+          <div class="card-top">
+            <span>STAR CREATION</span>
+            <span>01 / 01</span>
+          </div>
+          <div class="card-art">
+            <img src="assets/home-preview.jpg" alt="Star Creation Frames preview">
+            <div class="card-sheen"></div>
+          </div>
+          <div class="card-bottom">
+            <div>
+              <small>SCAN THE ARTWORK</small>
+              <strong>Then watch it come alive.</strong>
+            </div>
+            <span class="play">▶</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="info">
+      <div class="section-head">
+        <div class="eyebrow"><span></span> SIMPLE BY DESIGN</div>
+        <h2>Three steps.<br><em>One little surprise.</em></h2>
+      </div>
+      <div class="steps">
+        <article class="glass-panel">
+          <span>01</span>
+          <h3>Open</h3>
+          <p>Open Star Creation AR Frames in your phone browser.</p>
+        </article>
+        <article class="glass-panel">
+          <span>02</span>
+          <h3>Scan</h3>
+          <p>Allow camera access and point it at the printed frame.</p>
+        </article>
+        <article class="glass-panel">
+          <span>03</span>
+          <h3>Watch</h3>
+          <p>The matching frame is recognized and its video opens fullscreen.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="bottom-cta">
+      <p>NO QR CODE · NO APP · JUST THE FRAME</p>
+      <button class="text-btn" id="bottomScan">Try the scanner <span>→</span></button>
+    </section>
+  </main>
+
+  <section class="scanner" id="scanner" aria-hidden="true">
+    <div class="scanner-bar">
+      <button class="round-btn" id="closeScanner" aria-label="Close">×</button>
+      <div class="scanner-title">STAR CREATION <span>AR FRAMES</span></div>
+      <div class="live-dot"></div>
+    </div>
+
+    <div class="camera-stage">
+      <video id="camera" autoplay muted playsinline></video>
+      <div class="camera-dim"></div>
+
+      <div class="target-guide">
+        <i class="corner tl"></i>
+        <i class="corner tr"></i>
+        <i class="corner bl"></i>
+        <i class="corner br"></i>
+        <div class="scan-line"></div>
+      </div>
+
+      <div class="scan-copy">
+        <div class="radar">◎</div>
+        <strong id="scanTitle">STARTING CAMERA</strong>
+        <p id="scanText">Please allow camera access.</p>
+        <small id="scanDebug">Preparing recognition…</small>
+      </div>
+    </div>
+
+    <div class="scanner-footer">
+      <span id="scannerHint">Point the rear camera at the printed frame.</span>
+    </div>
+
+    <div class="video-view" id="videoView" aria-hidden="true">
+      <video id="experienceVideo" src="videos/ar-video.mp4" playsinline webkit-playsinline preload="auto"></video>
+      <div class="video-gradient"></div>
+      <div class="video-top-label">✦ EXPERIENCE UNLOCKED</div>
+      <div class="video-controls">
+        <button class="video-control" id="muteBtn">🔇 SOUND</button>
+        <button class="video-control" id="replayBtn">↻ REPLAY</button>
+        <button class="video-control" id="againBtn">SCAN AGAIN</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="toast" id="toast"></div>
+
+  <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
