@@ -16,17 +16,19 @@ const toast = document.getElementById("toast");
 let stream = null;
 let running = false;
 let detected = false;
-let refDescriptors = null;
-let refKeypoints = null;
-let detector = null;
-let matcher = null;
-let lastDetect = 0;
+let model = null;
+let targetEmbedding = null;
+let lastInference = 0;
 let raf = null;
 let muted = true;
-let detectorName = "";
+let consecutiveMatches = 0;
+let scanStartedAt = 0;
+let modelReady = false;
 
-const MIN_MATCHES = 4;
-const DETECT_INTERVAL = 300;
+const SIMILARITY_THRESHOLD = 0.84;
+const REQUIRED_CONSECUTIVE = 3;
+const MIN_SCAN_TIME = 1200;
+const INFERENCE_INTERVAL = 650;
 
 function toastMsg(message) {
   toast.textContent = message;
@@ -40,69 +42,58 @@ function setText(title, text, debug = "") {
   if (debug) scanDebug.textContent = debug;
 }
 
-function waitForCV() {
-  return new Promise((resolve, reject) => {
-    const started = Date.now();
-    const check = () => {
-      if (window.cv && cv.Mat) return resolve();
-      if (Date.now() - started > 20000) {
-        reject(new Error("OpenCV.js did not load. Check internet access."));
-        return;
-      }
-      setTimeout(check, 120);
-    };
-    check();
-  });
+function cosineSimilarity(a, b) {
+  let dot = 0, aa = 0, bb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    aa += a[i] * a[i];
+    bb += b[i] * b[i];
+  }
+  return (!aa || !bb) ? 0 : dot / (Math.sqrt(aa) * Math.sqrt(bb));
 }
 
-async function prepareReference() {
-  await waitForCV();
+function tensorToArray(tensor) {
+  return Array.from(tensor.dataSync());
+}
 
-  const img = new Image();
-  img.src = "assets/target-poster.jpg";
-  await img.decode();
+async function imageEmbedding(source) {
+  const activation = model.infer(source, "conv_preds");
+  const values = tensorToArray(activation);
+  activation.dispose();
+  return values;
+}
 
-  const maxSide = 1000;
-  const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
-  const w = Math.max(1, Math.round(img.naturalWidth * scale));
-  const h = Math.max(1, Math.round(img.naturalHeight * scale));
+function cropCameraFrame() {
+  const vw = camera.videoWidth;
+  const vh = camera.videoHeight;
+  const cropW = Math.floor(vw * 0.78);
+  const cropH = Math.floor(vh * 0.88);
+  const sx = Math.floor((vw - cropW) / 2);
+  const sy = Math.floor((vh - cropH) / 2);
 
   const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+  canvas.width = 480;
+  canvas.height = 480;
+  canvas.getContext("2d").drawImage(camera, sx, sy, cropW, cropH, 0, 0, 480, 480);
+  return canvas;
+}
 
-  const src = cv.imread(canvas);
-  const gray = new cv.Mat();
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  cv.equalizeHist(gray, gray);
+async function prepareAI() {
+  if (modelReady) return;
 
-  // Prefer SIFT when available because it is substantially more tolerant
-  // of scaling, lighting and screen/print differences.
-  if (cv.SIFT && typeof cv.SIFT.create === "function") {
-    detector = cv.SIFT.create(1200);
-    detectorName = "SIFT";
-    refKeypoints = new cv.KeyPointVector();
-    refDescriptors = new cv.Mat();
-    detector.detectAndCompute(gray, new cv.Mat(), refKeypoints, refDescriptors);
-    matcher = new cv.BFMatcher(cv.NORM_L2, false);
-  } else {
-    detector = new cv.ORB(2200);
-    detectorName = "ORB";
-    refKeypoints = new cv.KeyPointVector();
-    refDescriptors = new cv.Mat();
-    detector.detectAndCompute(gray, new cv.Mat(), refKeypoints, refDescriptors);
-    matcher = new cv.BFMatcher(cv.NORM_HAMMING, false);
-  }
+  setText("LOADING AI", "Preparing the visual recognition model…", "TensorFlow.js • MobileNet V2");
+  await tf.ready();
 
-  src.delete();
-  gray.delete();
+  model = await mobilenet.load({ version: 2, alpha: 1.0 });
 
-  if (!refDescriptors || refDescriptors.empty() || refDescriptors.rows < 8) {
-    throw new Error(`Reference image produced too few ${detectorName} features.`);
-  }
+  const target = new Image();
+  target.src = "assets/target-poster.jpg";
+  await target.decode();
 
-  return refDescriptors.rows;
+  targetEmbedding = await imageEmbedding(target);
+  modelReady = true;
+
+  setText("AI READY", "Point the rear camera at the registered poster.", "MobileNet visual fingerprint loaded");
 }
 
 async function openScanner() {
@@ -110,173 +101,114 @@ async function openScanner() {
   scanner.setAttribute("aria-hidden", "false");
   videoView.classList.remove("show");
   videoView.setAttribute("aria-hidden", "true");
-  detected = false;
 
-  setText("STARTING CAMERA", "Preparing image recognition…", "Loading reference image…");
+  experienceVideo.pause();
+  experienceVideo.currentTime = 0;
+
+  detected = false;
+  consecutiveMatches = 0;
+  scanStartedAt = 0;
 
   try {
-    const features = await prepareReference();
+    await prepareAI();
 
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error("Camera access requires HTTPS or localhost.");
     }
 
+    setText("STARTING CAMERA", "Please allow camera access.", "AI model ready");
+
     stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: "environment" },
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
-      },
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
       audio: false
     });
 
     camera.srcObject = stream;
     await camera.play();
 
-    setText(
-      "SCAN THE FRAME",
-      "Point the rear camera at the same poster image.",
-      `${detectorName} ready • ${features} reference features`
-    );
-    scannerHint.textContent = "Move closer and keep the whole poster visible.";
+    setText("SCAN THE FRAME", "Point the camera at the same poster image.", "AI similarity: waiting…");
+    scannerHint.textContent = "Keep the poster inside the guide.";
     running = true;
+    scanStartedAt = performance.now();
+    consecutiveMatches = 0;
     loop();
   } catch (error) {
     console.error(error);
-    let message = error.message;
-    if (error.name === "NotAllowedError") {
-      message = "Camera permission was denied. Allow camera access and try again.";
-    }
-    setText("SCAN NOT READY", message, "Open the HTTPS site and try again.");
+    let message = error.message || "Unable to start scanner.";
+    if (error.name === "NotAllowedError") message = "Camera permission was denied. Allow camera access and try again.";
+    setText("SCANNER NOT READY", message, "Check the HTTPS GitHub Pages URL.");
     toastMsg(message);
   }
 }
 
-function countGoodMatches(frameGray) {
-  const keypoints = new cv.KeyPointVector();
-  const descriptors = new cv.Mat();
+async function runAIInference() {
+  if (!running || detected || camera.readyState < 2 || !model) return;
 
-  detector.detectAndCompute(frameGray, new cv.Mat(), keypoints, descriptors);
-
-  let good = 0;
-  let total = 0;
-
-  if (!descriptors.empty()) {
-    const knn = new cv.DMatchVectorVector();
-    matcher.knnMatch(refDescriptors, descriptors, knn, 2);
-
-    total = knn.size();
-
-    for (let i = 0; i < knn.size(); i++) {
-      const pair = knn.get(i);
-
-      if (pair.size() >= 2) {
-        const a = pair.get(0);
-        const b = pair.get(1);
-
-        // Ratio test: tolerant enough for screen/print changes.
-        const ratio = detectorName === "SIFT" ? 0.78 : 0.82;
-        if (a.distance < ratio * b.distance) good++;
-
-      }
-
-      if (pair && typeof pair.delete === "function") pair.delete();
-    }
-
-    knn.delete();
-  }
-
-  if (keypoints && typeof keypoints.delete === "function") keypoints.delete();
-  if (descriptors && typeof descriptors.delete === "function") descriptors.delete();
-
-  return { good, total };
-}
-
-function detect() {
-  if (!running || detected || camera.readyState < 2) return;
+  const canvas = cropCameraFrame();
 
   try {
-    const width = 720;
-    const height = Math.round(width * camera.videoHeight / camera.videoWidth);
+    const currentEmbedding = await imageEmbedding(canvas);
+    const similarity = cosineSimilarity(targetEmbedding, currentEmbedding);
+    const percent = Math.max(0, Math.min(100, Math.round(similarity * 100)));
+    const isMatch = similarity >= SIMILARITY_THRESHOLD;
 
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    canvas.getContext("2d").drawImage(camera, 0, 0, width, height);
+    consecutiveMatches = isMatch ? consecutiveMatches + 1 : 0;
 
-    const frame = cv.imread(canvas);
-    const gray = new cv.Mat();
-
-    cv.cvtColor(frame, gray, cv.COLOR_RGBA2GRAY);
-    cv.equalizeHist(gray, gray);
-
-    const result = countGoodMatches(gray);
-
-    // Always expose the live number so we can diagnose real-world scanning.
     scanDebug.textContent =
-      `${detectorName}: ${result.good} good matches / ${result.total} candidates • need 4`;
+      `AI similarity: ${percent}% • confirm ${consecutiveMatches}/${REQUIRED_CONSECUTIVE}`;
 
-    if (result.good >= MIN_MATCHES) {
+    if (isMatch &&
+        consecutiveMatches >= REQUIRED_CONSECUTIVE &&
+        performance.now() - scanStartedAt >= MIN_SCAN_TIME) {
       triggerExperience();
     }
-
-    if (frame && typeof frame.delete === "function") frame.delete();
-    if (gray && typeof gray.delete === "function") gray.delete();
   } catch (error) {
-    console.error("Detection pass failed:", error);
-    scanDebug.textContent = `Detection error: ${error.message}`;
+    console.error("AI inference error:", error);
+    scanDebug.textContent = "AI inference error — retrying…";
   }
 }
 
 function loop() {
   if (!running) return;
-
   const now = performance.now();
-  if (now - lastDetect >= DETECT_INTERVAL) {
-    lastDetect = now;
-    detect();
+  if (now - lastInference >= INFERENCE_INTERVAL) {
+    lastInference = now;
+    runAIInference();
   }
-
   raf = requestAnimationFrame(loop);
 }
 
 function stopCamera() {
   running = false;
-
   if (raf) cancelAnimationFrame(raf);
   raf = null;
-
   if (stream) {
     stream.getTracks().forEach(track => track.stop());
     stream = null;
   }
-
   camera.srcObject = null;
 }
 
 function triggerExperience() {
+  if (detected) return;
   detected = true;
   stopCamera();
-
-  setText("FRAME DETECTED", "Opening your hidden video…", "✓ Poster recognized");
+  setText("FRAME DETECTED", "Opening your hidden video…", "✓ AI image match confirmed");
   scannerHint.textContent = "Experience unlocked.";
 
   setTimeout(() => {
     videoView.classList.add("show");
     videoView.setAttribute("aria-hidden", "false");
-
     experienceVideo.muted = muted;
     experienceVideo.currentTime = 0;
-
-    experienceVideo.play().catch(() => {
-      toastMsg("Tap SOUND or the video to start playback.");
-    });
+    experienceVideo.play().catch(() => toastMsg("Tap SOUND or the video to start playback."));
   }, 350);
 }
 
 function closeAll() {
   stopCamera();
   experienceVideo.pause();
+  experienceVideo.currentTime = 0;
   videoView.classList.remove("show");
   videoView.setAttribute("aria-hidden", "true");
   scanner.classList.remove("active");
