@@ -41,4 +41,9 @@ h1,h2{font-family:"Space Grotesk";letter-spacing:-.065em;line-height:.92;margin:
 .toast{position:fixed;z-index:200;bottom:24px;left:50%;transform:translate(-50%,20px);opacity:0;background:#fff;color:#111;padding:11px 16px;border-radius:999px;font-size:11px;font-weight:700;transition:.25s;max-width:90%;text-align:center}.toast.show{opacity:1;transform:translate(-50%,0)}
 @media(max-width:820px){.hero{grid-template-columns:1fr;padding-top:35px}.hero-card-wrap{height:470px;order:-1}.main-card{height:410px}.back-card{height:380px}.hero-copy{text-align:center}.lead{margin:22px auto}.scan-btn{margin:auto}.privacy{margin-bottom:0}.steps{grid-template-columns:1fr}.info{padding-top:85px}.logo span{display:none}}
 
-.flash-btn{font-size:18px;margin-left:auto;margin-right:10px}.flash-btn.on{background:linear-gradient(135deg,#ffd84d,#ff9d2e);color:#171717;box-shadow:0 0 24px rgba(255,190,60,.45)}
+.flash-btn{font-size:18px;margin-left:auto;margin-right:10px}
+.flash-btn.on{background:linear-gradient(135deg,#ffd84d,#ff9d2e);color:#171717;box-shadow:0 0 24px rgba(255,190,60,.45)}
+#mindarScene{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;z-index:0}
+#minderScene video,#mindarScene video{width:100%!important;height:100%!important;object-fit:cover!important}
+.camera-stage{z-index:2}
+.scanner-bar,.scanner-footer{z-index:5}
