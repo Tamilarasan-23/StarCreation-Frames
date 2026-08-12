@@ -92,6 +92,15 @@
   </main>
 
   <section class="scanner" id="scanner" aria-hidden="true">
+    <a-scene id="mindarScene"
+      mindar-image="imageTargetSrc: assets/targets.mind; autoStart: false; uiError: no; uiLoading: no; uiScanning: no; warmupTolerance: 3; missTolerance: 5;"
+      color-space="sRGB"
+      renderer="colorManagement: true; physicallyCorrectLights"
+      vr-mode-ui="enabled: false"
+      device-orientation-permission-ui="enabled: false">
+      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+      <a-entity mindar-image-target="targetIndex: 0"></a-entity>
+    </a-scene>
     <div class="scanner-bar">
       <button class="round-btn" id="closeScanner" aria-label="Close">×</button><button class="round-btn flash-btn" id="flashBtn" aria-label="Toggle flash">⚡</button>
       <div class="scanner-title">STAR CREATION <span>AR FRAMES</span></div>
@@ -99,22 +108,17 @@
     </div>
 
     <div class="camera-stage">
-      <video id="camera" autoplay muted playsinline></video>
       <div class="camera-dim"></div>
-
       <div class="target-guide">
-        <i class="corner tl"></i>
-        <i class="corner tr"></i>
-        <i class="corner bl"></i>
-        <i class="corner br"></i>
+        <i class="corner tl"></i><i class="corner tr"></i>
+        <i class="corner bl"></i><i class="corner br"></i>
         <div class="scan-line"></div>
       </div>
-
       <div class="scan-copy">
         <div class="radar">◎</div>
         <strong id="scanTitle">STARTING CAMERA</strong>
         <p id="scanText">Please allow camera access.</p>
-        <small id="scanDebug">Preparing recognition…</small>
+        <small id="scanDebug">Preparing MindAR…</small>
       </div>
     </div>
 
@@ -136,8 +140,8 @@
 
   <div class="toast" id="toast"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
