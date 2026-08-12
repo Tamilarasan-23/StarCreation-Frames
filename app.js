@@ -25,7 +25,7 @@ let raf = null;
 let muted = true;
 let detectorName = "";
 
-const MIN_MATCHES = 5;
+const MIN_MATCHES = 4;
 const DETECT_INTERVAL = 300;
 
 function toastMsg(message) {
@@ -178,18 +178,16 @@ function countGoodMatches(frameGray) {
         const ratio = detectorName === "SIFT" ? 0.78 : 0.82;
         if (a.distance < ratio * b.distance) good++;
 
-        a.delete();
-        b.delete();
       }
 
-      pair.delete();
+      if (pair && typeof pair.delete === "function") pair.delete();
     }
 
     knn.delete();
   }
 
-  keypoints.delete();
-  descriptors.delete();
+  if (keypoints && typeof keypoints.delete === "function") keypoints.delete();
+  if (descriptors && typeof descriptors.delete === "function") descriptors.delete();
 
   return { good, total };
 }
@@ -216,14 +214,14 @@ function detect() {
 
     // Always expose the live number so we can diagnose real-world scanning.
     scanDebug.textContent =
-      `${detectorName}: ${result.good} good matches / ${result.total} candidates`;
+      `${detectorName}: ${result.good} good matches / ${result.total} candidates • need 4`;
 
     if (result.good >= MIN_MATCHES) {
       triggerExperience();
     }
 
-    frame.delete();
-    gray.delete();
+    if (frame && typeof frame.delete === "function") frame.delete();
+    if (gray && typeof gray.delete === "function") gray.delete();
   } catch (error) {
     console.error("Detection pass failed:", error);
     scanDebug.textContent = `Detection error: ${error.message}`;
